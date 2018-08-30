@@ -1,0 +1,202 @@
+=============================security day02========================
+加密算法主要有以下几种分类：
+1.为确保数据机密性算法：
+a) 对称加密算法(AES,DES)
+
+b) 非对称加密算法（RSA，DSA）
+2.为确保数据完整性算法：
+a) 信息摘要（MD5，SHA256，SHA512）
+[root@proxy ~]# md5sum file?.txt                  //文件内容一致，则校验和也不变
+b92aa0f8aa5d5af5a47c6896283f3536  file1.txt
+b92aa0f8aa5d5af5a47c6896283f3536  file2.txt
+b92aa0f8aa5d5af5a47c6896283f3536  file3.txt
+[root@proxy ~]# sha512sum ?.txt
+f91804188db5b86b2b49b04e5b54354ba4a5d1d9f50f7a6ef0d2a971a8e74603274631f62efd311ae8460ef75a6f88db6529e33897f1dacde46be24f2820eafd  a.txt
+ea2fe56bb8c1fb5ada84963b42ed71b764a74b092d75755173ade06f2f4aada9c00d6c302e185035cbe85fdff31698bca93e8661f0cbcef52cf2ff65864fd742  b.txt
+[root@proxy ~]# vimdiff ?.txt                         //进去文本对比
+
+=========================gpg 加/解密==================
+GnuPG http://www.gnupg.org
+最流行的数据加密、数字签名工具软件
+yum -y isntall gnupg2
+pgp --version  //查看版本
+gpg(Gnupg)2.0.14 支持的算法: 公钥 RSA,ELG,DSA
+对称加密:3DES, CAST5,BLOWFISH,AES,AES256,.....
+散列:MD5,SHA1,.....SHA256,SHA512
+===========================gpg使用对称加密算法加密数据的操作===================
+[root@proxy ~]# yum -y install gnupg2              //安装软件
+[root@proxy ~]# gpg --version                      //查看版本
+[root@proxy ~]# gpg -c file2.txt                   //加密,会生成file2.txt.gpg文件
+[root@proxy ~]# gpg -d file2.txt.gpg > file2d.txt  //解密后保存
+[root@proxy ~]# cat file2d.txt                     //查看解密后的文件
+
+=====================使用GPG非对称加密方式保护文件======================
+[root@client ~]# gpg --gen-key                     //生成密钥对,终端若无法使用输入reset
+
+[root@client ~]# gpg --list-keys                   //查看公钥环
+/root/.gnupg/pubring.gpg
+------------------------------
+pub   2048R/421C9354 2017-08-16
+uid       UserA (User A) <UserA@tarena.com>
+sub   2048R/9FA3AD25 2017-08-16
+
+使用gpg命令结合--export选项将其中的公钥文本导出：
+[root@client ~]# gpg -a --export UserA > UserA.pub   //--export的作用是导出密钥 ,会报错但文件已生成
+                                                       -a的作用是导出的密钥存储为ASCII格式
+[root@client ~]# scp UserA.pub 192.168.4.5:/tmp/     //将密钥传给主机proxy
+
+[root@proxy ~]# gpg --import /tmp/UserA.pub          //使用gpg命令结合--import选项导入发送方的公钥信息
+                                                                       以便在加密文件时指定对应的公钥。
+[root@proxy ~]# echo "I love you ." > love.txt
+[root@proxy ~]# gpg -e -r UserA love.txt
+无论如何还是使用这把密钥吗？(y/N)y                          //确认使用此密钥加密文件
+//-e选项是使用密钥加密数据        -r选项后面跟的是密钥，说明使用哪个密钥对文件加密
+[root@proxy ~]# scp love.txt.gpg  192.168.4.100:/root    //加密的数据传给UserA
+
+UserA以自己的私钥解密文件（在192.168.4.100操作）
+[root@client ~]# gpg -d love.txt.gpg > love.txt
+[root@client ~]# cat love.txt                      //获得解密后的文件内容
+
+
+
+=======================AIDE入侵检测========================
+yum -y install aide
+修改配置文件
+确定对哪些数据进行校验，如何校验数据
+[root@proxy ~]# vim /etc/aide.conf
+@@define DBDIR /var/lib/aide                            //数据库目录
+@@define LOGDIR /var/log/aide                           //日志目录
+database_out=file:@@{DBDIR}/aide.db.new.gz              //数据库文件名
+//一下内容为可以检查的项目（权限，用户，组，大小，哈希值等)
+
+**********备份数据库，将数据库文件拷贝到U盘（非必须的操作）*****************
+入侵前对数据进行校验，生成初始化数据库
+[root@proxy ~]# aide --init
+AIDE, version 0.15.1
+AIDE database at /var/lib/aide/aide.db.new.gz initialized.
+//生成校验数据库，数据保存在/var/lib/aide/aide.db.new.gz
+[root@proxy ~]# cp /var/lib/aide/aide.db.new.gz   /media/  
+
+[root@proxy ~]# cd /var/lib/aide/
+[root@proxy ~]# mv aide.db.new.gz aide.db.gz      //new必须去掉,new文件主要是到处用
+[root@proxy ~]# aide --check                      //检查哪些数据发生了变化,主要对比无new的文件
+
+====================扫描与抓包分析======================
+1）安装软件
+[root@proxy ~]# yum -y install nmap
+# nmap  [扫描类型]  [选项]  <扫描目标 ...>
+//常用的扫描类型
+// -sS，TCP SYN扫描（半开,只要收到回复就不在扫描,网络会报警）
+// -sT，TCP 连接扫描（全开）
+// -sU，UDP扫描
+// -sP，ICMP扫描
+// -A，目标系统全面分析
+
+[root@proxy ~]# nmap  -sP  192.168.4.100 //在对方防火墙打开的情况下也可以
+
+使用-n选项可以不执行DNS解析
+[root@proxy ~]# nmap -nsP  192.168.4.100
+
+检查192.168.4.0/24网段内哪些主机可以ping通
+[root@proxy ~]# nmap  -n  -sP  192.168.4.0/24
+[root@proxy ~]# nmap -nsP 192.168.2.0/24 | awk  '/scan report/{print $5}' //过滤ip
+
+检查目标主机所开启的TCP服务
+[root@proxy ~]# nmap -sT 192.168.4.100
+
+检查192.168.4.0/24网段内哪些主机开启了FTP、SSH服务
+[root@proxy ~]# nmap -p 21-22 192.168.4.0/24
+
+检查目标主机所开启的UDP服务(需要大概十几分钟)
+[root@proxy ~]# nmap   -sU  192.168.4.100                //指定-sU扫描UDP
+
+全面分析目标主机192.168.4.100和192.168.4.5的操作系统信息
+[root@proxy ~]# nmap -A 192.168.4.100,5
+
+[root@room9pc01 ~]# traceroute www.baidu.com  //检查到baidu经过多少跳  
+
+==================使用tcpdump分析FTP访问中的明文交换信息=====================
+
+准备Vsftpd服务器（192.168.4.5操作）
+[root@proxy ~]# yum -y install vsftpd
+[root@proxy ~]# systemctl restart vsftpd
+
+启用tcpdump命令行抓包
+[root@proxy ~]# tcpdump -A host 192.168.4.5 and tcp port 21
+tcpdump: verbose output suppressed, use -v or -vv for full protocol decode
+listening on eth0, link-type EN10MB (Ethernet), capture size 65535 bytes
+.. ..                                            //进入等待捕获数据包的状态
+//监控选项如下：
+// -i，指定监控的网络接口（默认监听第一个网卡）
+// -A，转换为 ACSII 码，以方便阅读
+// -w，将数据包信息保存到指定文件
+// -r，从指定文件读取数据包信息
+//tcpdump的过滤条件：
+// 类型：host、net、port、portrange
+// 方向：src、dst
+// 协议：tcp、udp、ip、wlan、arp、……
+// 多个条件组合：and、or、not
+tcpdump src host 192.168.4.5 (只抓4.5发出去的包 dst只抓别人发给4.5的包)
+
+执行FTP访问，并观察tcpdump抓包结果
+从192.168.4.100访问主机192.168.4.5的vsftpd服务。
+[root@client ~]# yum -y install ftp
+[root@client ~]# ftp 192.168.4.5
+
+
+
+
+准备 2 台虚拟机,配置如下:
+vm1(eth1:192.168.2.20),vm2(eth1:192.168.2.30)
+在 vm1 主机使用 gpg 软件对/etc/rc.d/rc.local 文件进行对称加密,并将加密文件传给
+vm2
+在 vm2 对主机 vm1 传来的加密文件进行解密
+在 vm1 上使用 gpg 创建非对称密钥对,并将公钥到处传给 vm2
+在 vm2 主机将 vm1 传过来的公钥导入,并使用公钥对/etc/sysctl.conf 文件加密,并将
+加密文件传给 vm1,在 vm1 主机使用自己的私钥解密该文件
+在 vm1 主机使用私钥给文件/etc/sysctl.conf 文件签名,在 vm2 主机验证签名
+使用 aide 软件对/bin/和/sbin/目录进行入侵检测
+
+在 vm2 上安装 nginx,vsftpd,mariadb,mariadb-server,并启动所有对应的服务
+vm2:./configure --with-http_ssl_module 
+make && make install
+
+
+在 vm1 上使用 nmap 扫描 vm2 主机的所有 TCP 服务
+vm1:   yum -y isntall nmap
+nmap -sT 192.168.2.30          使用-n选项可以不执行DNS解析
+// -sS，TCP SYN扫描（半开）
+// -sT，TCP 连接扫描（全开）
+// -sU，UDP扫描
+// -sP，ICMP扫描
+// -A，目标系统全面分析
+使用-n选项可以不执行DNS解析
+
+[root@proxy ~]# nmap  -sP  192.168.4.100 检查192.168.4.100主机是否可以ping通
+
+在 vm2 上配置 nginx 用户认证,并使用 tcpdump 抓取 80 端口相关的数据包,注意默
+认抓取的是第一个网卡的数据,抓取其他网卡可以使用-i 选项
+vim /usr/local/nginx/conf/nginx.conf
+server {
+  listen 80;
+  server_name localhost;
+auth_basic "xx";
+auth_basic_user_file "/usr/local/nignx/pass";
+
+htpasswd -c /user/local/nginx/pass tom
+
+tcpdump -i eth1 -A host 192.168.2.30 and tcp port 80 (-w log.txt)
+
+在 vm1 上使用 firefox 访问 vm2 的页面,输入账户与密码,到 vm2 观察数据包
+firefox 192.168.2.30
+
+
+
+
+
+
+
+
+
+
+
