@@ -1,0 +1,231 @@
+审计的目的是基于事先配置的规则生成日志，记录可能发生在系统上的事件（正常或非正常行为的事件），审计不会为系统提供额外的安全保护，但她会发现并记录违反安全策略的人及其对应的行为。
+审计能够记录的日志内容：
+a) 日期与事件以及事件的结果
+b) 触发事件的用户
+c) 所有认证机制的使用都可以被记录，如ssh等(默认无配置也会被记录)
+d) 对关键数据文件的修改行为等都可以被记
+//audit只能在电脑挂机下停掉(内核启动)
+
+[root@proxy ~]# cat /etc/audit/auditd.conf         //查看配置文件，确定日志位置
+log_file = /var/log/audit/audit.log                //日志文件路径
+2）配置审计规则
+root@proxy ~]# auditctl  -s                        //查询状态
+[root@proxy ~]# auditctl  -l                        //查看规则
+[root@proxy ~]# auditctl  -D                        //删除所有规则
+
+定义临时文件系统规则：
+#语法格式：auditctl  -w  path  -p  permission  -k  key_name
+# path为需要审计的文件或目录
+# 权限可以是r,w,x,a(文件或目录的属性发生变化)
+# Key_name为可选项，方便识别哪些规则生成特定的日志项
+[root@proxy ~]# auditctl  -w  /etc/passwd  -p wa  -k  passwd_change
+  通过工具搜索日志
+系统提供的ausearch命令可以方便的搜索特定日志，默认该程序会搜索/var/log/audit/audit.log，ausearch options -if file_name可以指定文件名。
+[root@proxy ~]# ausearch -k sshd_config -i    
+//根据key搜索日志，-i选项表示以交互式方式操作
+
+如果需要创建永久审计规则，则需要修改规则配置文件：
+[root@proxy ~]# vim  /etc/audit/rules.d/audit.rules
+-w /etc/passwd -p wa -k passwd_changes
+-w /usr/sbin/fdisk -p x -k partition_disks //写在最下面(-D 不能放在-D前面 会清空所有规则)
+
+优化Nginx服务的安全配置
+1） 删除不需要的模块
+Nignx是模块化设计的软件，需要什么功能与模块以及不需要哪些模块，都可以在编译安装软件时自定义，使用--with参数可以开启某些模块，使用--without可以禁用某些模块。最小化安装永远都是对的方案！
+下面是禁用某些模块的案例：
+[root@proxy ~]# tar -xf nginx-1.12.tar.gz
+[root@proxy ~]# cd nginx-1.12
+[root@proxy nginx-1.12]# ./configure \
+>--without-http_autoindex_module \            //禁用自动索引文件目录模块
+>--without-http_ssi_module
+[root@proxy nginx-1.12]# make
+[root@proxy nginx-1.12]# make install
+
+2） 修改版本信息，并隐藏具体的版本号
+默认Nginx会显示版本信息以及具体的版本号，这些信息给攻击者带来了便利性，便于他们找到具体版本的漏洞。
+如果需要屏蔽版本号信息，执行如下操作，可以隐藏版本号。
+[root@proxy ~]# vim /usr/local/nginx/conf/nginx.conf
+… …
+http{
+     server_tokens off;                            //在http下面手动添加这么一行
+     … …
+}
+[root@proxy ~]# nginx -s reload
+[root@proxy ~]# curl -I http://192.168.4.5          //查看服务器响应的头部信息
+
+但服务器还是显示了使用的软件为nginx，通过如下方法可以修改该信息。
+[root@proxy nginx-1.12]# vim +48 src/http/ngx_http_header_filter_module.c
+//注意：vim这条命令必须在nginx-1.12源码包目录下执行！！！！！！
+//该文件修改前效果如下：
+static u_char ngx_http_server_string[] = "Server: nginx" CRLF;
+//下面是我们修改后的效果：
+static u_char ngx_http_server_string[] = "Server: Jacob" CRLF;
+//修改完成后，再去编译安装Nignx，版本信息将不再显示为Nginx，而是Jacob
+[root@proxy nginx-1.12]# ./configure
+[root@proxy nginx-1.12]# make && make install
+[root@proxy nginx-1.12]# killall nginx
+[root@proxy nginx-1.12]# /usr/local/nginx/sbin/nginx            //启动服务
+[root@proxy nginx-1.12]# curl -I http://192.168.4.5            //查看版本信息验证
+
+3） 限制并发量
+DDOS攻击者会发送大量的并发连接，占用服务器资源（包括连接数、带宽等），这样会导致正常用户处于等待或无法访问服务器的状态。
+Nginx提供了一个ngx_http_limit_req_module模块，可以有效降低DDOS攻击的风险，操作方法如下：
+[root@proxy ~]# vim /usr/local/nginx/conf/nginx.conf
+… …
+http{
+… …
+limit_req_zone $binary_remote_addr zone=one:10m rate=1r/s;
+    server {
+        listen 80;
+        server_name localhost;
+        limit_req zone=one burst=5;
+            }
+}
+//备注说明：
+//limit_req_zone语法格式如下：
+//limit_req_zone key zone=name:size rate=rate;
+//上面案例中是将客户端IP信息存储名称为one的共享内存，内存空间为10M
+//1M可以存储8千个IP信息，10M可以存储8万个主机连接的状态，容量可以根据需要任意调整
+//每秒中仅接受1个请求，多余的放入漏斗
+//漏斗超过5个则报错
+[root@proxy ~]# /usr/local/nginx/sbin/nginx -s reload
+
+4） 拒绝非法的请求
+网站使用的是HTTP协议，该协议中定义了很多方法，可以让用户连接服务器，获得需要的资源。但实际应用中一般仅需要get和post。
+具体HTTP请求方法的含义如表-1所示。
+表-1 HTTP请求方法及含义
+
+未修改服务器配置前，客户端使用不同请求方法测试：
+[root@client ~]# curl -i -X GET  http://192.168.4.5            //正常
+[root@client ~]# curl -i -X HEAD http://192.168.4.5            //正常
+//curl命令选项说明：
+//-i选项：访问服务器页面时，显示HTTP的头部信息
+//-X选项：指定请求服务器的方法
+
+通过如下设置可以让Nginx拒绝非法的请求方法：
+[root@proxy ~]# vim /usr/local/nginx/conf/nginx.conf
+http{
+       server {
+                 listen 80;
+#这里，!符号表示对正则取反，~符号是正则匹配符号
+#如果用户使用非GET或POST方法访问网站，则retrun返回444的错误信息
+              if ($request_method !~ ^(GET|POST)$ ) {
+                     return 444; //非标准状态码444表示关闭连接且不给客户端发响应头。
+               }    
+        }
+}
+[root@proxy ~]# /usr/local/nginx/sbin/nginx -s reload
+
+
+===================步骤二：数据库安全================
+
+1） 初始化安全脚本
+安装完MariaDB或MySQL后，默认root没有密码，并且提供了一个任何人都可以操作的test测试数据库。有一个名称为mysql_secure_installation的脚本，该脚本可以帮助我们为root设置密码，并禁止root从远程其他主机登陆数据库，并删除测试性数据库test。
+[root@proxy ~]# systemctl status mariadb
+//确保服务已启动 
+[root@proxy ~]# mysql_secure_installation
+//执行初始化安全脚本
+
+2）密码安全
+手动修改MariaDB或MySQL数据库密码的方法：
+[root@proxy ~]# mysqladmin -uroot -predhat password 'mysql'
+//修改密码，旧密码为redhat，新密码为mysql
+[root@proxy ~]# mysql -uroot -pmysql
+describe mysql.user 查看
+
+
+=================使用diff和patch工具打补丁=================
+在Linux系统中diff命令可以为我们生成补丁文件
+然后使用patch命令为有问题的程序代码打补丁。
+
+使用diff命令语法
+使用diff命令查看不同版本文件的差异。
+[root@proxy ~]# diff  test1.sh test2.sh                     //查看文件差异
+[root@proxy ~]# diff -u test1.sh test2.sh                 //查看差异，包含头部信息
+
+diff命令常用选项：
+-u	输出统一内容的头部信息（打补丁使用），计算机知道是哪个文件需要修改
+-r	递归对比目录中的所有资源（可以对比目录）
+-a	所有文件视为文本（包括二进制程序）
+-N	无文件视为空文件（空文件怎么变成第二个文件）
+-N选项备注说明：
+
+使用patch命令对单文件代码打补丁
+
+步骤二：使用patch命令对单文件代码打补丁
+
+1）准备实验环境
+[root@proxy ~]# cd demo
+[root@proxy demo]# vim test1.sh
+#!/bin/bash
+echo "hello world"
+echo "test"
+[root@proxy demo]# vim test2.sh 
+#!/bin/bash
+echo "hello the world"
+echo "test file"
+2) 生成补丁文件
+[root@proxy demo]# diff -u test1.sh test2.sh > test.patch
+
+3）使用patch命令打补丁
+在代码相同目录下为代码打补丁
+[root@proxy demo]# yum -y install patch
+[root@proxy demo]# patch -p0 < test.patch                    //打补丁
+patching file test1.sh
+//patch -pnum（其中num为数字，指定删除补丁文件中多少层路径前缀）
+//如原始路径为/u/howard/src/blurfl/blurfl.c
+//-p0则整个路径不变
+//-p1则修改路径为u/howard/src/blurfl/blurfl.c
+//-p4则修改路径为blurfl/blurfl.c
+//-R(reverse)反向修复，-E修复后如果文件为空，则删除该文件
+[root@proxy demo]# patch -RE < test.patch                     //还原旧版本，反向修复
+
+步骤三：对比目录中所有文件的差异
+
+1） 准备实验环境
+[root@proxy ~]# mkdir demo
+[root@proxy ~]# cd demo
+[root@proxy demo]# mkdir {source1,source2}
+[root@proxy demo]# echo "hello world"       > source1/test.sh
+[root@proxy demo]# cp /bin/find source1/
+[root@proxy demo]#  tree source1/                        //source1目录下2个文件
+|-- find
+`-- test.sh
+[root@proxy demo]# echo "hello the world"  > source2/test.sh
+[root@proxy demo]# echo "test" > source2/tmp.txt
+[root@proxy demo]# cp /bin/find source2/
+[root@proxy demo]# echo "1" >> source2/find 
+[root@proxy demo]#  tree source2/                        //source1目录下3个文件
+|-- find
+|-- test.sh
+`-- tmp.txt
+//注意：两个目录下find和test.sh文件内容不同，source2有tmp.txt而source1没有该文件
+2）制作补丁文件
+[root@proxy demo]# diff -u source1/ source2/
+//仅对比了文本文件test.sh；二进制文件、tmp都没有对比差异，仅提示，因为没有-a和-N选项
+[root@proxy demo]# diff -Nu source1/ source2/
+//对比了test.sh，并且使用source2目录的tmp.txt与source1的空文件对比差异。
+[root@proxy demo]# diff -Nua source1/ source2/
+//对比了test.sh、tmp.txt、find(程序)。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
