@@ -1,0 +1,55 @@
+
+targeted:定向的
+
+一般企业做监控的目的：实时报告系统状态，提前发现系统的问题。
+监控的资源可以分为：共有数据（HTTP、FTP、SSH、数据库等应用服务  TCP或UDP端口）
+私有数据（CPU、内存、磁盘、网卡流量等使用信息  用户、进程等运行信息）。
+监控软件可以使用：系统自带的命令、Cacti监控系统、Nagios监控系统、Zabbix监控系统。
+
+系统监控命令
+ps是显示瞬间进程的状态，并不动态连续；如果想对进程进行实时监控应该用top命令。
+参数：
+-A ：所有的进程均显示出来，与 -e 具有同样的效用；
+-a ： 显示现行终端机下的所有进程，包括其他用户的进程；
+-u ：以用户为主的进程状态 ；
+-x ：通常与 a 这个参数一起使用，可列出较完整信息。
+  
+uptime   查看服务器已经运行了多久，当前登录的用户有多少，以及服务器在过去的1分钟、5分钟、15分钟的系统平均负载值
+free       free | awk '/Mem/{print $4}'                     //查看剩余内存容量
+ifconfig  ifconfig eth0 |awk '/RX p/{print $5}'        //网卡接受数据包流量
+ss或netstat //-n以数字显示端口号  -t显示tcp连接 -u显示udp连接 -p显示监听端口对应的程序名称 -a查看所有连接状态信息
+ping
+swapon -s  查看交换分区信息
+df -h  //查看所有磁盘的使用率
+traceroute  traceroute www.baidu.com
+iostat
+
+多数源码包都是需要依赖包的，zabbix也一样，源码编译前需要先安装相关依赖包。
+[root@zabbixserver lnmp_soft]# yum -y install  net-snmp-devel \
+> curl-devel 
+//安装相关依赖包
+[root@zabbixserver lnmp_soft]# yum -y install  \
+> libevent-devel-2.0.21-4.el7.x86_64.rpm
+//注意libevent-devel这个软件包在lnmp_soft目录下有提供
+[root@zabbixserver lnmp_soft]# tar -xf zabbix-3.4.4.tar.gz
+[root@zabbixserver lnmp_soft]# cd zabbix-3.4.4/
+[root@zabbixserver zabbix-3.4.4]# ./configure  --enable-server \
+> --enable-proxy --enable-agent --with-mysql=/usr/bin/mysql_config \
+> --with-net-snmp --with-libcurl
+// --enable-server安装部署zabbix服务器端软件 (被监控不需要装该模块)
+// --enable-agent安装部署zabbix被监控端软件
+// --enable-proxy安装部署zabbix代理相关软件
+// --with-mysql配置mysql_config路径,列出masql的相关路径
+// --with-net-snmp允许zabbix通过snmp协议监控其他设备
+// --with-libcurl安装相关curl库文件，这样zabbix就可以通过curl连接http等服务，测试被监控主机服务的状态
+[root@zabbixserver zabbix-3.4.4]# make && make install
+
+
+
+
+
+
+
+
+
+
